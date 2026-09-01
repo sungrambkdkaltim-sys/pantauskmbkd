@@ -70,3 +70,11 @@ Buka file `firebase-config.js` di repo Anda, ganti isi `window.FIREBASE_CONFIG` 
 Buka situsnya — badge di pojok kiri atas akan berubah jadi **"Real-time"**. Siapa pun yang buka link akan melihat data yang sama; hanya yang sudah **"Masuk dengan Google"** yang bisa mengunggah/reset data, dan begitu diunggah, semua orang yang sedang membuka dashboard langsung melihat perubahannya tanpa refresh.
 
 **Catatan skala**: Firestore membatasi 1 dokumen maksimal ±1 MB. Untuk ukuran data BKD saat ini (ratusan responden) ini jauh dari batas — tapi kalau suatu saat datanya sangat besar (ribuan responden dengan kritik/saran panjang), beri tahu saya supaya strukturnya disesuaikan (dipecah per-layanan, bukan 1 dokumen besar).
+
+## Kalau update tidak muncul setelah commit (masalah cache)
+
+Browser (dan kadang GitHub Pages) bisa nge-cache file `.js` cukup agresif. Kalau setelah update `firebase-config.js` atau `bundle.js` situsnya masih menampilkan versi lama:
+
+1. **Cara paling pasti**: buka di jendela Incognito/Private baru — kalau di sana sudah benar, berarti situsnya sudah update, cuma browser normal Anda yang masih cache versi lama.
+2. **Bersihkan cache paksa**: buka DevTools (F12) → klik-kanan tombol refresh (↻) di address bar → pilih **"Empty Cache and Hard Reload"**.
+3. **Pencegahan untuk update berikutnya**: di `index.html`, dua baris `<script src="...">` punya akhiran `?v=2`. Setiap kali Anda (atau Claude) mengganti isi `firebase-config.js` atau `bundle.js`, naikkan angka ini (`?v=3`, `?v=4`, dst) supaya browser siapa pun otomatis mengambil versi baru tanpa perlu clear cache manual.
