@@ -1,9 +1,10 @@
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import * as XLSX from "xlsx";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList,
 } from "recharts";
-import { Upload, TrendingUp, TrendingDown, Users, ClipboardList, Eye, EyeOff, Search, AlertTriangle, CheckCircle2, Info, FileCheck2, FileX2, ShieldCheck } from "lucide-react";
+import { Upload, TrendingUp, TrendingDown, Users, ClipboardList, Eye, EyeOff, Search, AlertTriangle, CheckCircle2, Info, FileCheck2, FileX2, ShieldCheck, ChevronDown, ChevronUp, X, Cloud, CloudOff, LogIn, LogOut } from "lucide-react";
+import { isCloudConfigured, subscribeCloudData, writeCloudData, subscribeAuth, signInWithGoogle, signOutCloud } from "./firebaseSync.js";
 
 /* ============================================================================
    REFERENSI RESMI
@@ -298,6 +299,46 @@ function loadDefaultDataset() {
   return buildDataset(respondents);
 }
 
+/* ============================================================================
+   Persistensi lokal (localStorage) — supaya data hasil unggah TIDAK hilang
+   saat halaman di-refresh. Ini situs statis mandiri (bukan artifact Claude),
+   jadi localStorage aman & tepat dipakai di sini.
+   CATATAN: penyimpanan ini per-browser/per-perangkat, bukan database bersama
+   — kalau dibuka dari komputer/browser lain, yang tampil tetap data terakhir
+   yang diunggah DI PERANGKAT ITU (atau data contoh kalau belum pernah upload).
+   ============================================================================ */
+const STORAGE_KEY = "skm-dashboard-bkd:v1";
+
+function saveToStorage(dataset, meta) {
+  try {
+    const payload = { dataset, meta: { ...meta, uploadedAt: meta.uploadedAt ? meta.uploadedAt.toISOString() : null } };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch (err) {
+    // localStorage penuh/tidak tersedia (mis. mode private browsing) — abaikan,
+    // dashboard tetap jalan normal, hanya tidak persist antar-refresh.
+    console.warn("Gagal menyimpan data ke localStorage:", err);
+  }
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.dataset?.respondents?.length) return null;
+    return { dataset: parsed.dataset, meta: { ...parsed.meta, uploadedAt: parsed.meta.uploadedAt ? new Date(parsed.meta.uploadedAt) : null } };
+  } catch (err) {
+    return null;
+  }
+}
+
+function clearStorage() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch (err) { /* abaikan */ }
+}
+
+// Dibaca sekali saat modul dimuat (saat halaman dibuka/refresh)
+const PERSISTED = typeof window !== "undefined" ? loadFromStorage() : null;
+
 const TONE_COLORS = { great: "#2F6D4F", good: "#3D8361", warn: "#C58A2E", bad: "#B3432B", muted: "#8A8D85" };
 
 function MutuBadge({ mutu }) {
@@ -398,52 +439,122 @@ function readFileAsWorkbook(file) {
 }
 
 export default function SkmDashboard() {
-  const [dataset, setDataset] = useState(() => loadDefaultDataset());
-  const [meta, setMeta] = useState({ label: "Data contoh — SKM Online", uploadedAt: null, files: [] });
+  const cloudMode = isCloudConfigured();
+  const [dataset, setDataset] = useState(() => PERSISTED?.dataset || loadDefaultDataset());
+  const [meta, setMeta] = useState(() => PERSISTED?.meta || { label: "Data contoh — SKM Online", uploadedAt: null, files: [] });
   const [busy, setBusy] = useState(false);
   const [showPII, setShowPII] = useState(false);
   const [filterLayanan, setFilterLayanan] = useState("");
   const [search, setSearch] = useState("");
+  const [fileDetailsOpen, setFileDetailsOpen] = useState(false); // rincian per-file: ringkas by default
+  const [uploadPanelDismissed, setUploadPanelDismissed] = useState(false);
+  const [cloudUser, setCloudUser] = useState(null);
+  const [cloudSynced, setCloudSynced] = useState(false); // sudah pernah terima snapshot pertama dari Firestore?
+  const [cloudError, setCloudError] = useState(null);
+
+  // --- Mode cloud: berlangganan data real-time dari Firestore ---
+  // Begitu window.FIREBASE_CONFIG terisi valid (lihat firebase-config.js),
+  // dashboard ini otomatis menampilkan data yang SAMA ke semua orang yang
+  // membuka situsnya, di perangkat mana pun, dan update begitu ada yang
+  // mengunggah data baru — tanpa perlu refresh manual.
+  useEffect(() => {
+    if (!cloudMode) return;
+    const unsubData = subscribeCloudData((data, err) => {
+      if (err) { setCloudError("Gagal tersambung ke server real-time. Menampilkan data lokal terakhir."); return; }
+      setCloudError(null);
+      if (data) {
+        setDataset(data.dataset);
+        setMeta({ ...data.meta, uploadedAt: data.meta.uploadedAt ? new Date(data.meta.uploadedAt) : null });
+      }
+      setCloudSynced(true);
+    });
+    const unsubAuth = subscribeAuth((u) => setCloudUser(u));
+    return () => { unsubData(); unsubAuth(); };
+  }, [cloudMode]);
+
+  const handleSignIn = useCallback(async () => {
+    try { await signInWithGoogle(); } catch (err) { setCloudError("Gagal masuk dengan Google: " + err.message); }
+  }, []);
+  const handleSignOut = useCallback(async () => {
+    try { await signOutCloud(); } catch (err) { /* abaikan */ }
+  }, []);
 
   // PENTING: setiap kali fungsi ini dipanggil, dataset LAMA (baik data bawaan
   // maupun hasil upload sebelumnya) TIDAK ikut dibawa — allRespondents selalu
   // mulai dari array kosong dan dataset diganti total lewat setDataset(ds).
   // Jadi upload periode baru MENGGANTI, bukan MENUMPUK, data sebelumnya.
+  // Di mode cloud, hasilnya juga didorong ke Firestore agar semua orang
+  // yang sedang membuka dashboard melihat perubahan secara real-time.
   const handleFiles = useCallback(async (fileList) => {
+    if (cloudMode && !cloudUser) { setCloudError("Anda harus masuk dengan Google dulu sebelum mengunggah data."); return; }
     setBusy(true);
+    setCloudError(null);
     const files = Array.from(fileList);
     const results = [];
     let allRespondents = []; // <- selalu direset, tidak digabung dengan dataset sebelumnya
+    const unclassifiedAll = new Set();
     for (const file of files) {
       try {
         const wb = await readFileAsWorkbook(file);
         const parsed = parseHasilSurveyFile(wb, file.name);
         allRespondents = allRespondents.concat(parsed.respondents);
+        parsed.unclassified.forEach((u) => unclassifiedAll.add(u));
         results.push({ file: file.name, layanan: parsed.layanan, n: parsed.respondents.length, ok: true, unclassified: parsed.unclassified });
       } catch (err) {
         results.push({ file: file.name, ok: false, error: err.message || "Gagal diproses." });
       }
     }
+    let ds = null;
     if (allRespondents.length) {
       try {
-        const ds = buildDataset(allRespondents); // <- dataset lama ditimpa total di sini
-        setDataset(ds);
-        setFilterLayanan("");
+        ds = buildDataset(allRespondents); // <- dataset lama ditimpa total di sini
       } catch (err) {
         results.push({ file: "(gabungan)", ok: false, error: err.message });
+        ds = null;
       }
     } else {
       results.push({ file: "(semua file)", ok: false, error: "Tidak ada responden valid terbaca — dataset yang tampil TIDAK diubah." });
     }
-    setMeta({ label: `${files.length} file diunggah`, uploadedAt: new Date(), files: results });
+    const newMeta = { label: `${files.length} file diunggah`, uploadedAt: new Date(), files: results };
+    if (ds) {
+      if (cloudMode) {
+        try {
+          await writeCloudData(ds, newMeta); // <- didorong real-time ke semua orang lewat Firestore
+          // setDataset/setMeta akan terisi otomatis lewat onSnapshot di atas
+        } catch (err) {
+          setCloudError("Gagal menyimpan ke server: " + err.message);
+        }
+      } else {
+        setDataset(ds);
+        setMeta(newMeta);
+        setFilterLayanan("");
+        saveToStorage(ds, newMeta); // <- mode lokal: persist di browser ini saja
+      }
+    } else {
+      setMeta((m) => ({ ...m, files: results })); // tampilkan info error tanpa mengubah dataset
+    }
+    // Ringkas otomatis kalau semua file mulus; buka otomatis kalau ada yang perlu diperhatikan.
+    const hasIssues = results.some((r) => !r.ok) || unclassifiedAll.size > 0;
+    setFileDetailsOpen(hasIssues);
+    setUploadPanelDismissed(false);
     setBusy(false);
-  }, []);
+  }, [cloudMode, cloudUser]);
 
-  const handleReset = useCallback(() => {
-    setDataset(loadDefaultDataset());
-    setMeta({ label: "Data contoh — SKM Online", uploadedAt: null, files: [] });
+  const handleReset = useCallback(async () => {
+    if (cloudMode && !cloudUser) { setCloudError("Anda harus masuk dengan Google dulu sebelum mereset data."); return; }
+    const def = loadDefaultDataset();
+    const defMeta = { label: "Data contoh — SKM Online", uploadedAt: null, files: [] };
+    if (cloudMode) {
+      try { await writeCloudData(def, defMeta); } catch (err) { setCloudError("Gagal mereset di server: " + err.message); }
+    } else {
+      setDataset(def);
+      setMeta(defMeta);
+      clearStorage(); // <- hapus data tersimpan juga, supaya refresh berikutnya tetap kembali ke data contoh
+    }
     setFilterLayanan("");
-  }, []);
+    setFileDetailsOpen(false);
+    setUploadPanelDismissed(false);
+  }, [cloudMode, cloudUser]);
 
   const filteredKritik = useMemo(() => dataset.kritikList.filter((k) => {
     if (filterLayanan && k.layanan !== filterLayanan) return false;
@@ -478,7 +589,18 @@ export default function SkmDashboard() {
       <div style={{ background: "#14213D", color: "#fff", padding: "22px 28px" }}>
         <div style={{ maxWidth: 1180, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
           <div>
-            <div style={{ fontSize: 12, letterSpacing: 0.4, color: "#C99A2E", fontWeight: 600, marginBottom: 4 }}>BADAN KEPEGAWAIAN DAERAH</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+              <span style={{ fontSize: 12, letterSpacing: 0.4, color: "#C99A2E", fontWeight: 600 }}>BADAN KEPEGAWAIAN DAERAH</span>
+              {cloudMode ? (
+                <span title={cloudSynced ? "Tersambung real-time — data sama di semua perangkat" : "Menyambungkan…"} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 600, color: cloudSynced ? "#7FD8A0" : "#B7BDCC", background: "rgba(255,255,255,0.08)", padding: "2px 7px", borderRadius: 999 }}>
+                  <Cloud size={11} /> {cloudSynced ? "Real-time" : "Menyambungkan…"}
+                </span>
+              ) : (
+                <span title="Mode lokal — data hanya tersimpan di browser ini (belum terhubung Firestore)" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 600, color: "#B7BDCC", background: "rgba(255,255,255,0.08)", padding: "2px 7px", borderRadius: 999 }}>
+                  <CloudOff size={11} /> Mode lokal
+                </span>
+              )}
+            </div>
             <h1 style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 24, fontWeight: 600, margin: 0 }}>Dashboard Survei Kepuasan Masyarakat</h1>
             <div style={{ fontSize: 13, color: "#B7BDCC", marginTop: 3 }}>
               {dataset.overall.n} responden · {dataset.perLayanan.length} jenis layanan · {meta.label}
@@ -486,12 +608,28 @@ export default function SkmDashboard() {
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+            {cloudMode && (
+              <div>
+                {cloudUser ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#B7BDCC" }}>
+                    Masuk sebagai <b style={{ color: "#fff" }}>{cloudUser.email}</b>
+                    <button onClick={handleSignOut} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "none", border: "1px solid #34406B", color: "#B7BDCC", padding: "4px 8px", borderRadius: 4, fontSize: 11.5, cursor: "pointer" }}>
+                      <LogOut size={12} /> Keluar
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={handleSignIn} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#fff", color: "#14213D", border: "none", padding: "6px 12px", borderRadius: 4, fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>
+                    <LogIn size={13} /> Masuk dengan Google untuk mengunggah
+                  </button>
+                )}
+              </div>
+            )}
             <div style={{ display: "flex", gap: 8 }}>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#1F2E52", border: "1px solid #34406B", color: "#fff", padding: "9px 16px", borderRadius: 5, fontSize: 13.5, fontWeight: 500, cursor: busy ? "wait" : "pointer", opacity: busy ? 0.7 : 1 }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#1F2E52", border: "1px solid #34406B", color: "#fff", padding: "9px 16px", borderRadius: 5, fontSize: 13.5, fontWeight: 500, cursor: busy || (cloudMode && !cloudUser) ? "not-allowed" : "pointer", opacity: busy || (cloudMode && !cloudUser) ? 0.5 : 1 }}>
                 <Upload size={15} />
                 {busy ? "Memproses…" : "Unggah data periode baru (banyak file .xlsx)"}
                 <input
-                  type="file" accept=".xlsx,.xls" multiple disabled={busy} style={{ display: "none" }}
+                  type="file" accept=".xlsx,.xls" multiple disabled={busy || (cloudMode && !cloudUser)} style={{ display: "none" }}
                   onChange={(e) => {
                     if (e.target.files.length) handleFiles(e.target.files);
                     e.target.value = ""; // reset supaya file/set file yang sama bisa dipilih ulang & tetap memicu penggantian data
@@ -499,33 +637,56 @@ export default function SkmDashboard() {
                 />
               </label>
               {meta.uploadedAt && (
-                <button onClick={handleReset} disabled={busy} title="Kembali ke data contoh SKM Online" style={{ background: "transparent", border: "1px solid #34406B", color: "#B7BDCC", padding: "9px 14px", borderRadius: 5, fontSize: 13, cursor: busy ? "wait" : "pointer" }}>
+                <button onClick={handleReset} disabled={busy || (cloudMode && !cloudUser)} title="Kembali ke data contoh SKM Online" style={{ background: "transparent", border: "1px solid #34406B", color: "#B7BDCC", padding: "9px 14px", borderRadius: 5, fontSize: 13, cursor: busy || (cloudMode && !cloudUser) ? "not-allowed" : "pointer", opacity: busy || (cloudMode && !cloudUser) ? 0.5 : 1 }}>
                   Reset ke data contoh
                 </button>
               )}
             </div>
-            <div style={{ fontSize: 11.5, color: "#8891A8" }}>Setiap unggahan baru <b>mengganti seluruh</b> data yang sedang tampil, bukan menambah.</div>
+            <div style={{ fontSize: 11.5, color: "#8891A8", textAlign: "right" }}>
+              Setiap unggahan baru <b>mengganti seluruh</b> data yang sedang tampil, bukan menambah.
+              {cloudMode ? " Tersinkron real-time ke semua perangkat." : meta.uploadedAt && " Tersimpan otomatis di browser ini — akan tetap ada meski di-refresh."}
+            </div>
           </div>
         </div>
+        {cloudError && (
+          <div style={{ maxWidth: 1180, margin: "10px auto 0", padding: "8px 12px", background: "rgba(179,67,43,0.2)", border: "1px solid rgba(179,67,43,0.5)", borderRadius: 5, fontSize: 12.5, color: "#FFD7CC" }}>
+            {cloudError}
+          </div>
+        )}
       </div>
 
-      {/* Ringkasan hasil unggah */}
-      {meta.files.length > 0 && (
+      {/* Ringkasan hasil unggah — ringkas default, bisa dibuka untuk rincian per file */}
+      {meta.files.length > 0 && !uploadPanelDismissed && (
         <div style={{ maxWidth: 1180, margin: "16px auto 0", padding: "0 28px" }}>
-          <div style={{ background: "#fff", border: "1px solid #E3E1D8", borderRadius: 6, padding: "14px 18px" }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
-              <FileCheck2 size={15} color="#2F6D4F" /> {okFiles.length} file berhasil diproses
-              {failedFiles.length > 0 && <span style={{ color: "#B3432B" }}>· {failedFiles.length} gagal</span>}
+          <div style={{ background: "#fff", border: "1px solid #E3E1D8", borderRadius: 6, padding: "12px 16px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <button
+                onClick={() => setFileDetailsOpen((s) => !s)}
+                style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#1B1D18" }}
+              >
+                <FileCheck2 size={15} color="#2F6D4F" />
+                {okFiles.length} file berhasil diproses
+                {failedFiles.length > 0 && <span style={{ color: "#B3432B" }}>· {failedFiles.length} gagal</span>}
+                {allUnclassified.length > 0 && <span style={{ color: "#C58A2E" }}>· {allUnclassified.length} kolom tak dikenali</span>}
+                {fileDetailsOpen ? <ChevronUp size={15} color="#9A9C92" /> : <ChevronDown size={15} color="#9A9C92" />}
+              </button>
+              <button onClick={() => setUploadPanelDismissed(true)} title="Tutup ringkasan ini" style={{ background: "none", border: "none", cursor: "pointer", color: "#9A9C92", padding: 4 }}>
+                <X size={15} />
+              </button>
             </div>
-            <div style={{ display: "grid", gap: 6 }}>
-              {meta.files.map((f, i) => (
-                <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 12.5, color: f.ok ? "#3A3C36" : "#B3432B" }}>
-                  {f.ok ? <FileCheck2 size={13} style={{ flexShrink: 0 }} /> : <FileX2 size={13} style={{ flexShrink: 0 }} />}
-                  <span style={{ fontWeight: 500 }}>{f.file}</span>
-                  {f.ok ? <span style={{ color: "#8A8D85" }}>→ {f.layanan} ({f.n} responden)</span> : <span>{f.error}</span>}
-                </div>
-              ))}
-            </div>
+
+            {fileDetailsOpen && (
+              <div style={{ display: "grid", gap: 6, marginTop: 12, paddingTop: 12, borderTop: "1px solid #EFEEE7" }}>
+                {meta.files.map((f, i) => (
+                  <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 12.5, color: f.ok ? "#3A3C36" : "#B3432B" }}>
+                    {f.ok ? <FileCheck2 size={13} style={{ flexShrink: 0 }} /> : <FileX2 size={13} style={{ flexShrink: 0 }} />}
+                    <span style={{ fontWeight: 500 }}>{f.file}</span>
+                    {f.ok ? <span style={{ color: "#8A8D85" }}>→ {f.layanan} ({f.n} responden)</span> : <span>{f.error}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+
             {allUnclassified.length > 0 && (
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #EFEEE7", fontSize: 12, color: "#C58A2E", display: "flex", gap: 8 }}>
                 <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
