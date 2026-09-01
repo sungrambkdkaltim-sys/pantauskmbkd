@@ -34,3 +34,39 @@ File `bundle.js` sudah di-*minify* dan digabung dari source `App.jsx` — jangan
 - Data yang diunggah **hanya diproses di browser pengguna** (tidak dikirim ke server mana pun) — cocok untuk hosting statis seperti GitHub Pages karena tidak butuh backend.
 - Nama, email, dan no. telepon responden **disembunyikan secara default** di bagian Kritik & Saran; ada tombol untuk menampilkannya bila diperlukan tim internal.
 - Rumus IKM: Σ(rata-rata per unsur × 0,11) × 25 — mengikuti konvensi Kepmenpan 25/2004 yang dipakai pada template Permenpan RB 14/2017 (sudah diverifikasi cocok dengan laporan resmi BKD Semester I 2026).
+
+## Setup Firebase (real-time & multi-perangkat) — OPSIONAL
+
+Tanpa langkah ini, dashboard tetap jalan normal dalam **mode lokal** (data tersimpan per-browser). Ikuti langkah ini kalau Anda butuh data yang **sama secara instan di semua perangkat**, diunggah oleh beberapa staf dari lokasi berbeda.
+
+### 1. Buat project Firebase (gratis, akun Google pribadi juga bisa)
+1. Buka [console.firebase.google.com](https://console.firebase.google.com) → **Add project** → beri nama (mis. "skm-bkd-kaltim") → lanjutkan sampai selesai (boleh matikan Google Analytics, tidak perlu).
+2. Di halaman project, klik ikon **`</>`** (Web app) → beri nickname → **Register app**. Anda akan diberi objek `firebaseConfig` — **salin semua isinya**.
+
+### 2. Isi `firebase-config.js`
+Buka file `firebase-config.js` di repo Anda, ganti isi `window.FIREBASE_CONFIG` dengan nilai yang barusan disalin. Simpan & push ke GitHub — situs otomatis pindah ke mode cloud.
+
+### 3. Aktifkan Firestore Database
+1. Di Firebase Console → menu **Build → Firestore Database** → **Create database** → pilih lokasi server (terdekat: `asia-southeast2` / Jakarta) → mode **Production**.
+2. Buka tab **Rules**, ganti isinya dengan ini, lalu **Publish**:
+   ```
+   rules_version = '2';
+   service cloud.firestore {
+     match /databases/{database}/documents {
+       match /skmDashboard/{doc} {
+         allow read: if true;                    // semua orang bisa memantau
+         allow write: if request.auth != null;   // hanya yang sudah login Google yang bisa unggah/reset
+       }
+     }
+   }
+   ```
+   *(Opsional, lebih ketat: kalau mau membatasi hanya email tertentu yang boleh unggah, ganti baris `allow write` menjadi `allow write: if request.auth.token.email in ["staf1@gmail.com", "staf2@gmail.com"];`)*
+
+### 4. Aktifkan login Google
+1. Firebase Console → **Build → Authentication** → **Get started** → tab **Sign-in method** → aktifkan **Google**.
+2. Masih di Authentication → tab **Settings → Authorized domains** → **Add domain** → masukkan domain GitHub Pages Anda (mis. `sungrambkdkaltim-sys.github.io`). **Langkah ini wajib** — kalau lewat, tombol "Masuk dengan Google" akan gagal.
+
+### 5. Selesai
+Buka situsnya — badge di pojok kiri atas akan berubah jadi **"Real-time"**. Siapa pun yang buka link akan melihat data yang sama; hanya yang sudah **"Masuk dengan Google"** yang bisa mengunggah/reset data, dan begitu diunggah, semua orang yang sedang membuka dashboard langsung melihat perubahannya tanpa refresh.
+
+**Catatan skala**: Firestore membatasi 1 dokumen maksimal ±1 MB. Untuk ukuran data BKD saat ini (ratusan responden) ini jauh dari batas — tapi kalau suatu saat datanya sangat besar (ribuan responden dengan kritik/saran panjang), beri tahu saya supaya strukturnya disesuaikan (dipecah per-layanan, bukan 1 dokumen besar).
