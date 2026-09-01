@@ -11,7 +11,10 @@
 </head>
 <body>
   <div id="root"></div>
-  <script src="./firebase-config.js"></script>
-  <script src="./bundle.js"></script>
+  <!-- Versi (?v=) di akhir URL memaksa browser mengambil file baru setiap
+       kali isinya berubah, bukan pakai cache lama. Naikkan angka ini setiap
+       kali file firebase-config.js atau bundle.js diperbarui. -->
+  <script src="./firebase-config.js?v=2"></script>
+  <script src="./bundle.js?v=2"></script>
 </body>
 </html>
