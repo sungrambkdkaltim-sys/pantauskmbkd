@@ -20,6 +20,14 @@ File `bundle.js` sudah di-*minify* dan digabung dari source `App.jsx` — jangan
 - Klik **"Unggah data periode baru"** untuk memilih banyak file `.xlsx` sekaligus (format ekspor mentah "Hasil Survey" dari SKM Online — 1 file = 1 jenis layanan).
 - Setiap kali unggah, seluruh data lama **diganti total**, tidak ditambah/ditumpuk.
 - Tombol **"Reset ke data contoh"** muncul setelah upload pertama, untuk kembali ke data contoh awal kapan saja.
+- Panel ringkasan hasil unggah otomatis **ringkas** (collapsed) kalau semua file mulus — klik untuk buka rincian per file. Kalau ada file gagal atau ada kolom pertanyaan tak dikenali, panel otomatis terbuka supaya langsung terlihat.
+
+## Data tersimpan otomatis di browser (localStorage)
+
+- Setelah upload berhasil, data **otomatis tersimpan di browser** perangkat itu — jadi kalau halaman di-refresh, data TIDAK hilang/balik ke data contoh.
+- **Penting**: penyimpanan ini per-browser/per-perangkat, bukan database bersama di server. Kalau dashboard dibuka dari komputer atau browser lain, yang tampil adalah data terakhir yang diunggah **DI PERANGKAT ITU** (atau data contoh kalau belum pernah upload di perangkat tersebut) — bukan data yang sama untuk semua orang.
+- Kalau tim butuh semua orang melihat data yang sama secara real-time dari perangkat berbeda, itu perlu backend/database sungguhan (di luar cakupan situs statis ini) — beri tahu saya kalau ke depannya butuh ini, supaya bisa direncanakan.
+- Membersihkan cache/data situs di browser, atau membuka via mode private/incognito, akan mengembalikan ke data contoh.
 
 ## Catatan penting
 
