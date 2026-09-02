@@ -3,8 +3,8 @@ import * as XLSX from "xlsx";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList,
 } from "recharts";
-import { Upload, TrendingUp, TrendingDown, Users, ClipboardList, Eye, EyeOff, Search, AlertTriangle, CheckCircle2, Info, FileCheck2, FileX2, ShieldCheck, ChevronDown, ChevronUp, X, Cloud, CloudOff, LogIn, LogOut } from "lucide-react";
-import { isCloudConfigured, subscribeCloudData, writeCloudData, subscribeAuth, signInWithGoogle, signOutCloud } from "./firebaseSync.js";
+import { Upload, TrendingUp, TrendingDown, Users, ClipboardList, Eye, EyeOff, Search, AlertTriangle, CheckCircle2, Info, FileCheck2, FileX2, ShieldCheck, ChevronDown, ChevronUp, X, Cloud, CloudOff, LogIn, LogOut, History, ArrowLeftCircle } from "lucide-react";
+import { isCloudConfigured, subscribeCloudData, writeCloudData, subscribeAuth, signInWithGoogle, signOutCloud, listCloudHistory } from "./firebaseSync.js";
 
 /* ============================================================================
    REFERENSI RESMI
@@ -451,6 +451,10 @@ export default function SkmDashboard() {
   const [cloudUser, setCloudUser] = useState(null);
   const [cloudSynced, setCloudSynced] = useState(false); // sudah pernah terima snapshot pertama dari Firestore?
   const [cloudError, setCloudError] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyList, setHistoryList] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [viewingHistory, setViewingHistory] = useState(null); // { id, dataset, meta } saat sedang lihat arsip lama, null = tampilan live
 
   // --- Mode cloud: berlangganan data real-time dari Firestore ---
   // Begitu window.FIREBASE_CONFIG terisi valid (lihat firebase-config.js),
@@ -468,7 +472,7 @@ export default function SkmDashboard() {
       }
       setCloudSynced(true);
     });
-    const unsubAuth = subscribeAuth((u) => setCloudUser(u));
+    const unsubAuth = subscribeAuth((u) => { setCloudUser(u); if (!u) setShowPII(false); });
     return () => { unsubData(); unsubAuth(); };
   }, [cloudMode]);
 
@@ -476,7 +480,7 @@ export default function SkmDashboard() {
     try { await signInWithGoogle(); } catch (err) { setCloudError("Gagal masuk dengan Google: " + err.message); }
   }, []);
   const handleSignOut = useCallback(async () => {
-    try { await signOutCloud(); } catch (err) { /* abaikan */ }
+    try { await signOutCloud(); setShowPII(false); } catch (err) { /* abaikan */ }
   }, []);
 
   // PENTING: setiap kali fungsi ini dipanggil, dataset LAMA (baik data bawaan
@@ -519,7 +523,7 @@ export default function SkmDashboard() {
     if (ds) {
       if (cloudMode) {
         try {
-          await writeCloudData(ds, newMeta); // <- didorong real-time ke semua orang lewat Firestore
+          await writeCloudData(ds, newMeta, `Unggah ${files.length} file`); // <- didorong real-time + tercatat di riwayat
           // setDataset/setMeta akan terisi otomatis lewat onSnapshot di atas
         } catch (err) {
           setCloudError("Gagal menyimpan ke server: " + err.message);
@@ -545,7 +549,7 @@ export default function SkmDashboard() {
     const def = loadDefaultDataset();
     const defMeta = { label: "Data contoh — SKM Online", uploadedAt: null, files: [] };
     if (cloudMode) {
-      try { await writeCloudData(def, defMeta); } catch (err) { setCloudError("Gagal mereset di server: " + err.message); }
+      try { await writeCloudData(def, defMeta, "Reset ke data contoh"); } catch (err) { setCloudError("Gagal mereset di server: " + err.message); }
     } else {
       setDataset(def);
       setMeta(defMeta);
@@ -556,17 +560,50 @@ export default function SkmDashboard() {
     setUploadPanelDismissed(false);
   }, [cloudMode, cloudUser]);
 
-  const filteredKritik = useMemo(() => dataset.kritikList.filter((k) => {
+  // --- Riwayat / arsip per periode ---
+  const handleOpenHistory = useCallback(async () => {
+    setHistoryOpen((s) => !s);
+    if (!historyOpen && historyList.length === 0) {
+      setHistoryLoading(true);
+      try {
+        const list = await listCloudHistory(20);
+        setHistoryList(list);
+      } catch (err) {
+        setCloudError("Gagal memuat riwayat: " + err.message);
+      }
+      setHistoryLoading(false);
+    }
+  }, [historyOpen, historyList.length]);
+
+  const handleViewHistoryEntry = useCallback((entry) => {
+    setViewingHistory({
+      id: entry.id,
+      dataset: entry.dataset,
+      meta: { ...entry.meta, uploadedAt: entry.meta.uploadedAt ? new Date(entry.meta.uploadedAt) : null },
+      actionLabel: entry.actionLabel,
+      updatedByEmail: entry.updatedByEmail,
+      updatedAt: entry.updatedAt,
+    });
+    setHistoryOpen(false);
+  }, []);
+
+  const handleBackToLive = useCallback(() => setViewingHistory(null), []);
+
+  // Saat melihat arsip lama, tampilkan data arsip itu; kalau tidak, tampilkan data live.
+  const displayDataset = viewingHistory ? viewingHistory.dataset : dataset;
+  const displayMeta = viewingHistory ? viewingHistory.meta : meta;
+
+  const filteredKritik = useMemo(() => displayDataset.kritikList.filter((k) => {
     if (filterLayanan && k.layanan !== filterLayanan) return false;
     if (search && !k.teks.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
-  }), [dataset, filterLayanan, search]);
+  }), [displayDataset, filterLayanan, search]);
 
   const trendUnsur = useMemo(() => {
-    const idxMin = dataset.overall.uAvg.indexOf(Math.min(...dataset.overall.uAvg));
-    const idxMax = dataset.overall.uAvg.indexOf(Math.max(...dataset.overall.uAvg));
-    return { weakest: UNSUR_LABELS[idxMin], weakestVal: dataset.overall.uAvg[idxMin], strongest: UNSUR_LABELS[idxMax], strongestVal: dataset.overall.uAvg[idxMax] };
-  }, [dataset]);
+    const idxMin = displayDataset.overall.uAvg.indexOf(Math.min(...displayDataset.overall.uAvg));
+    const idxMax = displayDataset.overall.uAvg.indexOf(Math.max(...displayDataset.overall.uAvg));
+    return { weakest: UNSUR_LABELS[idxMin], weakestVal: displayDataset.overall.uAvg[idxMin], strongest: UNSUR_LABELS[idxMax], strongestVal: displayDataset.overall.uAvg[idxMax] };
+  }, [displayDataset]);
 
   const failedFiles = meta.files.filter((f) => !f.ok);
   const okFiles = meta.files.filter((f) => f.ok);
@@ -603,8 +640,8 @@ export default function SkmDashboard() {
             </div>
             <h1 style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 24, fontWeight: 600, margin: 0 }}>Dashboard Survei Kepuasan Masyarakat</h1>
             <div style={{ fontSize: 13, color: "#B7BDCC", marginTop: 3 }}>
-              {dataset.overall.n} responden · {dataset.perLayanan.length} jenis layanan · {meta.label}
-              {meta.uploadedAt && ` · ${meta.uploadedAt.toLocaleString("id-ID")}`}
+              {displayDataset.overall.n} responden · {displayDataset.perLayanan.length} jenis layanan · {displayMeta.label}
+              {displayMeta.uploadedAt && ` · ${displayMeta.uploadedAt.toLocaleString("id-ID")}`}
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
@@ -625,11 +662,11 @@ export default function SkmDashboard() {
               </div>
             )}
             <div style={{ display: "flex", gap: 8 }}>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#1F2E52", border: "1px solid #34406B", color: "#fff", padding: "9px 16px", borderRadius: 5, fontSize: 13.5, fontWeight: 500, cursor: busy || (cloudMode && !cloudUser) ? "not-allowed" : "pointer", opacity: busy || (cloudMode && !cloudUser) ? 0.5 : 1 }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#1F2E52", border: "1px solid #34406B", color: "#fff", padding: "9px 16px", borderRadius: 5, fontSize: 13.5, fontWeight: 500, cursor: busy || (cloudMode && !cloudUser) || viewingHistory ? "not-allowed" : "pointer", opacity: busy || (cloudMode && !cloudUser) || viewingHistory ? 0.5 : 1 }}>
                 <Upload size={15} />
-                {busy ? "Memproses…" : "Unggah data periode baru (banyak file .xlsx)"}
+                {busy ? "Memproses…" : viewingHistory ? "Kembali ke live untuk mengunggah" : "Unggah data periode baru (banyak file .xlsx)"}
                 <input
-                  type="file" accept=".xlsx,.xls" multiple disabled={busy || (cloudMode && !cloudUser)} style={{ display: "none" }}
+                  type="file" accept=".xlsx,.xls" multiple disabled={busy || (cloudMode && !cloudUser) || !!viewingHistory} style={{ display: "none" }}
                   onChange={(e) => {
                     if (e.target.files.length) handleFiles(e.target.files);
                     e.target.value = ""; // reset supaya file/set file yang sama bisa dipilih ulang & tetap memicu penggantian data
@@ -639,6 +676,11 @@ export default function SkmDashboard() {
               {meta.uploadedAt && (
                 <button onClick={handleReset} disabled={busy || (cloudMode && !cloudUser)} title="Kembali ke data contoh SKM Online" style={{ background: "transparent", border: "1px solid #34406B", color: "#B7BDCC", padding: "9px 14px", borderRadius: 5, fontSize: 13, cursor: busy || (cloudMode && !cloudUser) ? "not-allowed" : "pointer", opacity: busy || (cloudMode && !cloudUser) ? 0.5 : 1 }}>
                   Reset ke data contoh
+                </button>
+              )}
+              {cloudMode && (
+                <button onClick={handleOpenHistory} title="Lihat arsip data periode-periode sebelumnya" style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #34406B", color: "#B7BDCC", padding: "9px 14px", borderRadius: 5, fontSize: 13, cursor: "pointer" }}>
+                  <History size={14} /> Riwayat
                 </button>
               )}
             </div>
@@ -653,7 +695,40 @@ export default function SkmDashboard() {
             {cloudError}
           </div>
         )}
+        {historyOpen && (
+          <div style={{ maxWidth: 1180, margin: "10px auto 0" }}>
+            <div style={{ background: "#1F2E52", border: "1px solid #34406B", borderRadius: 6, padding: "12px 16px", maxHeight: 320, overflowY: "auto" }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: "#fff", marginBottom: 8 }}>Riwayat unggahan (20 terakhir)</div>
+              {historyLoading && <div style={{ fontSize: 12.5, color: "#B7BDCC" }}>Memuat…</div>}
+              {!historyLoading && historyList.length === 0 && <div style={{ fontSize: 12.5, color: "#B7BDCC" }}>Belum ada riwayat.</div>}
+              <div style={{ display: "grid", gap: 4 }}>
+                {historyList.map((h) => (
+                  <button key={h.id} onClick={() => handleViewHistoryEntry(h)} style={{ display: "flex", justifyContent: "space-between", gap: 12, textAlign: "left", background: "rgba(255,255,255,0.05)", border: "none", borderRadius: 4, padding: "8px 10px", cursor: "pointer", color: "#fff" }}>
+                    <span style={{ fontSize: 12.5 }}>
+                      <b>{h.actionLabel || h.meta?.label}</b>
+                      <span style={{ color: "#B7BDCC" }}> · {h.dataset?.overall?.n ?? "?"} responden · IKM {h.dataset?.overall?.ikm?.toFixed(1) ?? "-"}</span>
+                    </span>
+                    <span style={{ fontSize: 11.5, color: "#8891A8", whiteSpace: "nowrap" }}>
+                      {h.updatedByEmail || "-"} · {h.updatedAt?.toDate ? h.updatedAt.toDate().toLocaleString("id-ID") : ""}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+
+      {viewingHistory && (
+        <div style={{ background: "#FFF6E0", borderBottom: "1px solid #E8D8A8", padding: "10px 28px", display: "flex", justifyContent: "center", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, color: "#7A5B12" }}>
+            📁 Melihat arsip: <b>{viewingHistory.actionLabel || viewingHistory.meta.label}</b> — diunggah {viewingHistory.updatedAt?.toDate ? viewingHistory.updatedAt.toDate().toLocaleString("id-ID") : ""} oleh {viewingHistory.updatedByEmail || "-"}. Ini <b>bukan</b> tampilan live.
+          </span>
+          <button onClick={handleBackToLive} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#7A5B12", color: "#fff", border: "none", padding: "6px 12px", borderRadius: 5, fontSize: 12.5, cursor: "pointer" }}>
+            <ArrowLeftCircle size={13} /> Kembali ke tampilan live
+          </button>
+        </div>
+      )}
 
       {/* Ringkasan hasil unggah — ringkas default, bisa dibuka untuk rincian per file */}
       {meta.files.length > 0 && !uploadPanelDismissed && (
@@ -700,12 +775,12 @@ export default function SkmDashboard() {
       <div style={{ maxWidth: 1180, margin: "0 auto", padding: "24px 28px 0" }}>
         {/* KPI row */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14, marginBottom: 24 }}>
-          <KpiCard label="Nilai IKM Keseluruhan" value={dataset.overall.ikm.toFixed(2)} sub={<MutuBadge mutu={dataset.overall.mutu} />} accent={TONE_COLORS[dataset.overall.mutu.tone]} icon={CheckCircle2} />
-          <KpiCard label="Jumlah Responden" value={dataset.overall.n} sub="periode berjalan" accent="#4A6FA5" icon={Users} />
+          <KpiCard label="Nilai IKM Keseluruhan" value={displayDataset.overall.ikm.toFixed(2)} sub={<MutuBadge mutu={displayDataset.overall.mutu} />} accent={TONE_COLORS[displayDataset.overall.mutu.tone]} icon={CheckCircle2} />
+          <KpiCard label="Jumlah Responden" value={displayDataset.overall.n} sub="periode berjalan" accent="#4A6FA5" icon={Users} />
           <KpiCard label="Unsur Terlemah" value={`U${UNSUR_LABELS.indexOf(trendUnsur.weakest) + 1}`} sub={`${trendUnsur.weakest} (${trendUnsur.weakestVal.toFixed(2)})`} accent="#B3432B" icon={TrendingDown} />
           <KpiCard label="Unsur Terkuat" value={`U${UNSUR_LABELS.indexOf(trendUnsur.strongest) + 1}`} sub={`${trendUnsur.strongest} (${trendUnsur.strongestVal.toFixed(2)})`} accent="#2F6D4F" icon={TrendingUp} />
-          {dataset.ipak.score != null && (
-            <KpiCard label="Indeks Persepsi Anti Korupsi" value={dataset.ipak.score.toFixed(2)} sub={`skala 1–4 · ${dataset.ipak.n} responden`} accent="#6B4FA0" icon={ShieldCheck} />
+          {displayDataset.ipak.score != null && (
+            <KpiCard label="Indeks Persepsi Anti Korupsi" value={displayDataset.ipak.score.toFixed(2)} sub={`skala 1–4 · ${displayDataset.ipak.n} responden`} accent="#6B4FA0" icon={ShieldCheck} />
           )}
         </div>
 
@@ -716,7 +791,7 @@ export default function SkmDashboard() {
               <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 17, fontWeight: 600 }}>Nilai Rata-rata per Unsur Pelayanan</div>
               <div style={{ fontSize: 12, color: "#8A8D85" }}>skala 1–4, 9 unsur Permenpan RB 14/2017</div>
             </div>
-            <UnsurChart uAvg={dataset.overall.uAvg} />
+            <UnsurChart uAvg={displayDataset.overall.uAvg} />
             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 18px", marginTop: 6, fontSize: 12, color: "#6B6E64" }}>
               {UNSUR_LABELS.map((l, i) => <span key={i}><b>U{i + 1}</b> {l}</span>)}
             </div>
@@ -724,7 +799,7 @@ export default function SkmDashboard() {
 
           <div style={{ background: "#fff", border: "1px solid #E3E1D8", borderRadius: 6, padding: "18px 20px" }}>
             <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 17, fontWeight: 600, marginBottom: 14 }}>Nilai IKM per Jenis Layanan</div>
-            <LayananBarChart perLayanan={dataset.perLayanan} />
+            <LayananBarChart perLayanan={displayDataset.perLayanan} />
           </div>
         </div>
 
@@ -732,16 +807,16 @@ export default function SkmDashboard() {
         <div style={{ background: "#fff", border: "1px solid #E3E1D8", borderRadius: 6, padding: "18px 20px", marginBottom: 16, overflowX: "auto" }}>
           <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 17, fontWeight: 600, marginBottom: 14 }}>Rincian per Layanan</div>
           <table>
-            <thead><tr><th>Jenis Layanan</th><th>Responden</th><th>NRR</th><th>Nilai IKM</th><th>Mutu</th>{dataset.ipak.avg && <th>IPAK</th>}</tr></thead>
+            <thead><tr><th>Jenis Layanan</th><th>Responden</th><th>NRR</th><th>Nilai IKM</th><th>Mutu</th>{displayDataset.ipak.avg && <th>IPAK</th>}</tr></thead>
             <tbody>
-              {dataset.perLayanan.map((d) => (
+              {displayDataset.perLayanan.map((d) => (
                 <tr key={d.layanan}>
                   <td>{d.layanan}</td>
                   <td>{d.n}</td>
                   <td>{d.nrr.toFixed(2)}</td>
                   <td style={{ fontWeight: 600 }}>{d.ikm.toFixed(2)}</td>
                   <td><MutuBadge mutu={d.mutu} /></td>
-                  {dataset.ipak.avg && <td>{d.ipakAvg != null ? d.ipakAvg.toFixed(2) : "-"}</td>}
+                  {displayDataset.ipak.avg && <td>{d.ipakAvg != null ? d.ipakAvg.toFixed(2) : "-"}</td>}
                 </tr>
               ))}
             </tbody>
@@ -753,8 +828,8 @@ export default function SkmDashboard() {
           <div style={{ background: "#fff", border: "1px solid #E3E1D8", borderRadius: 6, padding: "18px 20px" }}>
             <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 17, fontWeight: 600, marginBottom: 14 }}>Profil Responden</div>
             <div style={{ display: "grid", gap: 20 }}>
-              <DemografiChart title="Pendidikan terakhir" data={dataset.demografi.pendidikan} />
-              <DemografiChart title="Pekerjaan" data={dataset.demografi.pekerjaan} />
+              <DemografiChart title="Pendidikan terakhir" data={displayDataset.demografi.pendidikan} />
+              <DemografiChart title="Pekerjaan" data={displayDataset.demografi.pekerjaan} />
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 16, padding: "10px 12px", background: "#F5F4EF", borderRadius: 5, fontSize: 12, color: "#6B6E64" }}>
               <Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
@@ -768,7 +843,7 @@ export default function SkmDashboard() {
               <thead><tr><th>Kode</th><th>Interval IKM</th><th>Kinerja</th></tr></thead>
               <tbody>
                 {MUTU_TABLE.map((m) => (
-                  <tr key={m.code} style={{ background: dataset.overall.mutu.code === m.code ? "#F5F4EF" : "transparent" }}>
+                  <tr key={m.code} style={{ background: displayDataset.overall.mutu.code === m.code ? "#F5F4EF" : "transparent" }}>
                     <td style={{ fontWeight: 700, color: TONE_COLORS[m.tone] }}>{m.code}</td>
                     <td>{m.min.toFixed(2)} – {m.max.toFixed(2)}</td>
                     <td>{m.label}</td>
@@ -776,22 +851,22 @@ export default function SkmDashboard() {
                 ))}
               </tbody>
             </table>
-            {dataset.trust.pusat != null && (
+            {displayDataset.trust.pusat != null && (
               <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid #EFEEE7" }}>
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Tingkat Kepercayaan (skala 1–10)</div>
                 <div style={{ display: "flex", gap: 24, fontSize: 13 }}>
-                  <div>Pemerintah Pusat <b style={{ fontSize: 16 }}>{dataset.trust.pusat.toFixed(1)}</b></div>
-                  <div>Pemerintah Daerah <b style={{ fontSize: 16 }}>{dataset.trust.daerah.toFixed(1)}</b></div>
+                  <div>Pemerintah Pusat <b style={{ fontSize: 16 }}>{displayDataset.trust.pusat.toFixed(1)}</b></div>
+                  <div>Pemerintah Daerah <b style={{ fontSize: 16 }}>{displayDataset.trust.daerah.toFixed(1)}</b></div>
                 </div>
               </div>
             )}
-            {dataset.ipak.avg && (
+            {displayDataset.ipak.avg && (
               <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid #EFEEE7" }}>
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Indeks Persepsi Anti Korupsi (skala 1–4)</div>
                 <div style={{ display: "grid", gap: 4, fontSize: 12.5 }}>
                   {IPAK_LABELS.map((l, i) => (
                     <div key={i} style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span style={{ color: "#6B6E64" }}>{l}</span><b>{dataset.ipak.avg[i].toFixed(2)}</b>
+                      <span style={{ color: "#6B6E64" }}>{l}</span><b>{displayDataset.ipak.avg[i].toFixed(2)}</b>
                     </div>
                   ))}
                 </div>
@@ -813,13 +888,23 @@ export default function SkmDashboard() {
               </div>
               <select value={filterLayanan} onChange={(e) => setFilterLayanan(e.target.value)} style={{ padding: "7px 10px", border: "1px solid #D8D6CB", borderRadius: 5, fontSize: 13, background: "#fff" }}>
                 <option value="">Semua layanan</option>
-                {dataset.perLayanan.map((d) => <option key={d.layanan} value={d.layanan}>{d.layanan}</option>)}
+                {displayDataset.perLayanan.map((d) => <option key={d.layanan} value={d.layanan}>{d.layanan}</option>)}
               </select>
-              {dataset.hasNama && (
-                <button onClick={() => setShowPII((s) => !s)} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "1px solid #D8D6CB", borderRadius: 5, fontSize: 13, background: showPII ? "#FBEAE5" : "#fff", color: showPII ? "#8A3620" : "#3A3C36", cursor: "pointer" }}>
-                  {showPII ? <EyeOff size={14} /> : <Eye size={14} />}
-                  {showPII ? "Sembunyikan nama" : "Tampilkan nama"}
-                </button>
+              {displayDataset.hasNama && (
+                // Di mode cloud, tombol ini WAJIB login Google — mencegah pengunjung
+                // publik (tanpa akun) melihat nama/email/telepon responden.
+                // Di mode lokal (belum pakai Firebase), tetap bebas seperti semula
+                // karena datanya memang hanya ada di browser milik orang itu sendiri.
+                (!cloudMode || cloudUser) ? (
+                  <button onClick={() => setShowPII((s) => !s)} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "1px solid #D8D6CB", borderRadius: 5, fontSize: 13, background: showPII ? "#FBEAE5" : "#fff", color: showPII ? "#8A3620" : "#3A3C36", cursor: "pointer" }}>
+                    {showPII ? <EyeOff size={14} /> : <Eye size={14} />}
+                    {showPII ? "Sembunyikan nama" : "Tampilkan nama"}
+                  </button>
+                ) : (
+                  <button onClick={handleSignIn} title="Data pribadi responden hanya bisa dilihat oleh staf yang sudah masuk" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "1px solid #D8D6CB", borderRadius: 5, fontSize: 13, background: "#fff", color: "#9A9C92", cursor: "pointer" }}>
+                    <LogIn size={14} /> Masuk untuk lihat nama
+                  </button>
+                )
               )}
             </div>
           </div>
@@ -829,7 +914,7 @@ export default function SkmDashboard() {
               <div key={i} style={{ padding: "10px 14px", background: "#FAF9F5", border: "1px solid #EFEEE7", borderRadius: 5 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#4A6FA5" }}>{k.layanan}</span>
-                  {dataset.hasNama && <span style={{ fontSize: 12, color: "#9A9C92" }}>{showPII ? (k.nama || "-") : maskName(k.nama)}</span>}
+                  {displayDataset.hasNama && <span style={{ fontSize: 12, color: "#9A9C92" }}>{showPII ? (k.nama || "-") : maskName(k.nama)}</span>}
                 </div>
                 <div style={{ fontSize: 13.5, color: "#2B2D27", lineHeight: 1.5 }}>{k.teks}</div>
               </div>
