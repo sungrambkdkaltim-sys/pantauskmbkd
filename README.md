@@ -21,6 +21,8 @@ File `bundle.js` sudah di-*minify* dan digabung dari source `App.jsx` — jangan
 - Setiap kali unggah, seluruh data lama **diganti total**, tidak ditambah/ditumpuk.
 - Tombol **"Reset ke data contoh"** muncul setelah upload pertama, untuk kembali ke data contoh awal kapan saja.
 - Panel ringkasan hasil unggah otomatis **ringkas** (collapsed) kalau semua file mulus — klik untuk buka rincian per file. Kalau ada file gagal atau ada kolom pertanyaan tak dikenali, panel otomatis terbuka supaya langsung terlihat.
+- **Riwayat** (khusus mode cloud/Firebase): tombol "Riwayat" di header menampilkan 20 unggahan terakhir (siapa, kapan, berapa responden, IKM berapa). Klik salah satu untuk melihat arsip periode itu — dashboard akan menampilkan pita kuning "Melihat arsip" di bagian atas, dan tombol "Kembali ke tampilan live" untuk kembali. Data lama **tidak pernah hilang** walau ada unggahan baru — setiap unggahan/reset otomatis tersimpan sebagai entri baru di riwayat.
+- **Privasi**: tombol "Tampilkan nama" di bagian Kritik & Saran **hanya bisa dipakai setelah Masuk dengan Google** (di mode cloud) — pengunjung yang belum login tidak bisa melihat nama/email/no. HP responden, hanya bisa melihat skor & isi kritik/saran saja.
 
 ## Data tersimpan otomatis di browser (localStorage)
 
