@@ -23,6 +23,12 @@ File `bundle.js` sudah di-*minify* dan digabung dari source `App.jsx` — jangan
 - Panel ringkasan hasil unggah otomatis **ringkas** (collapsed) kalau semua file mulus — klik untuk buka rincian per file. Kalau ada file gagal atau ada kolom pertanyaan tak dikenali, panel otomatis terbuka supaya langsung terlihat.
 - **Riwayat** (khusus mode cloud/Firebase): tombol "Riwayat" di header menampilkan 20 unggahan terakhir (siapa, kapan, berapa responden, IKM berapa). Klik salah satu untuk melihat arsip periode itu — dashboard akan menampilkan pita kuning "Melihat arsip" di bagian atas, dan tombol "Kembali ke tampilan live" untuk kembali. Data lama **tidak pernah hilang** walau ada unggahan baru — setiap unggahan/reset otomatis tersimpan sebagai entri baru di riwayat.
 - **Privasi**: tombol "Tampilkan nama" di bagian Kritik & Saran **hanya bisa dipakai setelah Masuk dengan Google** (di mode cloud) — pengunjung yang belum login tidak bisa melihat nama/email/no. HP responden, hanya bisa melihat skor & isi kritik/saran saja.
+- **Notifikasi update**: kalau ada orang lain (atau Anda sendiri di perangkat lain) mengunggah/reset data saat Anda sedang membuka dashboard, muncul notifikasi kecil di bawah layar "Data diperbarui oleh ... · jam berapa" — tidak perlu refresh manual untuk tahu ada perubahan.
+- **Unduh laporan**: tombol **"Unduh Excel"** menghasilkan file `.xlsx` berisi 5 sheet (Ringkasan, Per Unsur, Per Layanan, Demografi, Kritik & Saran) dari data yang sedang tampil — nama responden di file ikut status "Tampilkan nama" saat ini (kalau sedang disembunyikan di layar, di file juga tetap disamarkan). Tombol **"Cetak / Simpan PDF"** membuka dialog cetak browser dengan tampilan bersih (tombol & panel interaktif otomatis disembunyikan) — pilih "Save as PDF" di dialog cetak untuk menyimpan sebagai file PDF.
+- **Tampilan mobile**: dashboard sudah dirapikan untuk layar HP — tombol menumpuk penuh-lebar, nama layanan yang panjang di chart dipotong otomatis (nama lengkap tetap muncul saat disentuh), dan tabel bisa digeser ke samping dengan petunjuk yang jelas.
+- **Unduh laporan**: tombol **"Unduh Excel"** menghasilkan file `.xlsx` berisi 5 sheet (Ringkasan, Per Unsur, Per Layanan, Demografi, Kritik & Saran) dari data yang SEDANG TAMPIL (kalau sedang lihat arsip lama, yang terunduh ya arsip itu). Status "Tampilkan nama" ikut terbawa — kalau nama sedang disembunyikan di layar, di file yang diunduh juga tetap disamarkan. Tombol **"Cetak / Simpan PDF"** membuka dialog print browser dengan tampilan bersih (tombol & panel kontrol disembunyikan otomatis) — pilih "Save as PDF" di dialog print untuk menyimpan sebagai PDF.
+- **Notifikasi real-time** (mode cloud): kalau ada orang lain (atau Anda sendiri di perangkat lain) mengunggah/reset data selagi dashboard sedang terbuka, muncul notifikasi kecil di bagian bawah layar "Data diperbarui oleh ... · jam ..." — tidak perlu refresh manual untuk tahu ada perubahan.
+- **Tampilan mobile**: chart dan tabel sudah disesuaikan untuk layar HP — nama layanan yang panjang dipotong otomatis (nama lengkap tetap muncul saat disentuh), tombol-tombol menumpuk rapi, dan ada petunjuk geser untuk tabel yang lebar.
 
 ## Data tersimpan otomatis di browser (localStorage)
 
@@ -50,19 +56,25 @@ Buka file `firebase-config.js` di repo Anda, ganti isi `window.FIREBASE_CONFIG` 
 
 ### 3. Aktifkan Firestore Database
 1. Di Firebase Console → menu **Build → Firestore Database** → **Create database** → pilih lokasi server (terdekat: `asia-southeast2` / Jakarta) → mode **Production**.
-2. Buka tab **Rules**, ganti isinya dengan ini, lalu **Publish**:
+2. Buka tab **Rules**, ganti isinya dengan ini (sudah dibatasi hanya `sungram.bkdkaltim@gmail.com` yang boleh unggah/reset), lalu **Publish**:
    ```
    rules_version = '2';
    service cloud.firestore {
      match /databases/{database}/documents {
        match /skmDashboard/{doc} {
-         allow read: if true;                    // semua orang bisa memantau
-         allow write: if request.auth != null;   // hanya yang sudah login Google yang bisa unggah/reset
+         allow read: if true;
+         allow write: if request.auth != null
+           && request.auth.token.email == "sungram.bkdkaltim@gmail.com";
+       }
+       match /skmDashboardHistory/{doc} {
+         allow read: if true;
+         allow write: if request.auth != null
+           && request.auth.token.email == "sungram.bkdkaltim@gmail.com";
        }
      }
    }
    ```
-   *(Opsional, lebih ketat: kalau mau membatasi hanya email tertentu yang boleh unggah, ganti baris `allow write` menjadi `allow write: if request.auth.token.email in ["staf1@gmail.com", "staf2@gmail.com"];`)*
+   *(Kalau nanti ada staf lain yang perlu ditambahkan, ganti baris `email ==` menjadi `email in ["sungram.bkdkaltim@gmail.com", "staf2@gmail.com"]` — dan jangan lupa tambahkan email yang sama ke `ALLOWED_UPLOADER_EMAILS` di `src/shared.js` supaya pesan di tampilan dashboard juga ikut sesuai.)*
 
 ### 4. Aktifkan login Google
 1. Firebase Console → **Build → Authentication** → **Get started** → tab **Sign-in method** → aktifkan **Google**.
